@@ -1,5 +1,5 @@
 <#
-    -Script should run from service account on machine with SED Client installed.
+    -Script should run from service account on machine with PGP Client installed.
     -Service Account's PGP Client will need either:
         A) Group Keys for all group folders added 
         B) Service Account will need to be added to all AD SGs for encrypted folders
@@ -14,41 +14,76 @@
 #>
 function SearchForUnencrypted
 {
+    #Uncomment one of the other $strFlag for active rencrypt vs reporting only
+    #Copies unencrypted files out and back in to correctly reencrypt
+    $strFlag = "Reencrypt"
+
+    #Appends all files and folders processed to YYYYMMDD_PGP_Rencrypt.log for review
+    # $strFlag= "VerifyOnly"
+
     $CurrentDate = Get-Date -Format yyyyMMdd
-    #Folder this script is stored in
     $Script_Path = "C:\scripts\PGP_Reencrypt\"
     $VerifyLogFile = $Script_Path + $CurrentDate + "_Encryption.txt"
-    #pgpfolders.txt file stored in script folder, contains locations of all encrypted folders to scan.
     $aryPGP_Folder = Get-Content ($Script_Path + "pgpfolders.txt")
-    #Appends all files and folders processed to YYYYMMDD_PGP_Rencrypt.log for review
+    
+    $Temp_Folder = $Script_Path + "temp\"
     $Logfile = $Script_Path + $CurrentDate + "_PGP_Reencrypt.log"
     $FolderFlag = ""
     $newline = "`r`n"
-
+    
     foreach ($PGP_Folder in $aryPGP_Folder)
     {
-        #Run pgpnetshare.exe to find unencrypted files > output results to temp log file: YYYYMMDD_Enryption.txt (removed after script is run)
+        #Run pgpnetshare.exe to find unencrypted files > output results to log file: YYYYMMDD_Enryption.txt (removed after script is run)
         Start-Process -FilePath "C:\Program Files (x86)\PGP Corporation\PGP Desktop\pgpnetshare.exe" -ArgumentList "-v $PGP_Folder --output-file $VerifyLogFile --verbose" -Wait -NoNewWindow -PassThru
         
-        #Parses temp log file for unencrypted files
+        #Parses log file for unencrypted files
         $aryUnencrypted = Get-Content $VerifyLogfile | Select-String -pattern "unencrypted \[([^]]+)\]" -AllMatches| ForEach-Object {$_.matches}
         if ($aryUnencrypted)
         {
             foreach ($unencryptedstring in $aryUnencrypted)
             {
                 $strTempPath = $unencryptedstring.Value.substring(13, ($unencryptedstring.Value.Length-14))
+                $strfile = Split-Path $strTempPath -Leaf
+
                 #Log Time and File Name
-                "$(Get-date) --- Unencrypted: $strTempPath" | Out-file $Logfile -Append -Force
-                
-                if ((Get-Item $strTempPath).PSIsContainer)
+                "$(Get-date) --- Process: $strTempPath" | Out-file $Logfile -Append -Force
+
+                if ($strFlag -eq "Reencrypt")
                 {
-                    #Checks for unencrypted subfolders within encrypted parent folder.
-                    #$FolderFlag subfolders get added to end of log file for review. 
-                    #Consider copy-item for entire subfolder? Why didn't FinanceIT?
-                    $FolderFlag += $newline +$strTempPath
+                    if ((Get-Item $strTempPath).PSIsContainer)
+                    {
+                        #Checks for unencrypted subfolders within encrypted parent folder.
+                        #$FolderFlag subfolders get added to end of log file for review. 
+                        #Consider copy-item for entire subfolder? Why didn't FinanceIT?
+                        $FolderFlag += $newline +$strTempPath
+                    }
+                    else 
+                    {
+                        if (-Not (Test-Path "$Temp_Folder$strfile"))
+                        {
+                            #Copy unencrypted files out of folder to temp folder > Copy back in to encrypt
+                            Copy-Item $strTempPath -Destination "$Temp_Folder"
+                            Copy-Item $Temp_Folder$strfile -Destination $strTempPath -Force
+                            #Remove file from temp folder
+                            if (Test-Path $strTempPath)
+                            {
+                                Remove-Item "$Temp_Folder$strfile" -Force
+                            }
+                            else 
+                            {
+                                "$(Get-Date) ------ Encryption Failure: $strTempPath" | Out-File $Logfile -Append -Force
+                            }
+                        }
+                        else 
+                        {
+                            "$(Get-Date) ------ Encryption Failure: $strTempPath" | Out-File $Logfile -Append -Force    
+                        }        
+                    }
                 }
+                
             }
-        }    
+        }
+    
         else 
         {
             "$(Get-date) --- $PGP_Folder --- All files encrypted" | Out-file $Logfile -Append -Force   
@@ -73,7 +108,8 @@ function SearchForUnencrypted
 
     #Send-MailMessage -From $From -to $To -Cc $CC -Subject $Subject -Body $Body -SmtpServer $SMTPServer -Credential $anonCredentials `
     #-Attachments $AttachedReports –DeliveryNotificationOption OnSuccess
-    Send-MailMessage -From $From -to "wdell@doit.tamu.edu" -Subject $Subject -Body $Body -SmtpServer $SMTPServer -Credential $anonCredentials -Attachments $Logfile -DeliveryNotificationOption OnSuccess
+    Send-MailMessage -From $From -to "wdell@doit.tamu.edu" -Subject $Subject -Body $Body -SmtpServer $SMTPServer -Credential $anonCredentials `
+    -Attachments $Logfile -DeliveryNotificationOption OnSuccess
 }    
 
 function main
