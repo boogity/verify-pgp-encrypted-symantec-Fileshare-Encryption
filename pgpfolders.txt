@@ -1,0 +1,3 @@
+C:\TEMP\testenc
+C:\TEMP\testunenc
+"C:\TEMP\testenc group key"
